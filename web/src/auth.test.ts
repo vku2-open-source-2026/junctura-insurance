@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: 2026 Junctura Contributors
+// SPDX-License-Identifier: Apache-2.0
+import { describe, expect, it } from "vitest";
+import { buildAuthorizeUrl, buildLogoutUrl, createPkce } from "./auth";
+
+const settings = { issuer: "https://id.example.test/identity/realms/junctura", clientId: "health-insurance-web" };
+
+describe("PKCE", () => {
+  it("derives the S256 challenge from the verifier", async () => {
+    const { verifier, challenge, state } = await createPkce();
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    const expected = Buffer.from(digest).toString("base64url");
+    expect(challenge).toBe(expected);
+    expect(verifier.length).toBeGreaterThanOrEqual(43);
+    expect(state).not.toBe(verifier);
+  });
+
+  it("never repeats a verifier", async () => {
+    expect((await createPkce()).verifier).not.toBe((await createPkce()).verifier);
+  });
+});
+
+describe("authorize and logout URLs", () => {
+  it("asks the identity provider for a code with PKCE", () => {
+    const url = new URL(buildAuthorizeUrl(settings, "http://localhost:5185/", { challenge: "abc", state: "xyz" }));
+    expect(url.origin + url.pathname).toBe(`${settings.issuer}/protocol/openid-connect/auth`);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      client_id: "health-insurance-web", redirect_uri: "http://localhost:5185/", response_type: "code", scope: "openid",
+      code_challenge: "abc", code_challenge_method: "S256", state: "xyz",
+    });
+  });
+
+  it("returns to the app after sign-out", () => {
+    const url = new URL(buildLogoutUrl(settings, "http://localhost:5185/", "id-token"));
+    expect(url.searchParams.get("post_logout_redirect_uri")).toBe("http://localhost:5185/");
+    expect(url.searchParams.get("id_token_hint")).toBe("id-token");
+    expect(new URL(buildLogoutUrl(settings, "http://localhost:5185/")).searchParams.has("id_token_hint")).toBe(false);
+  });
+});
